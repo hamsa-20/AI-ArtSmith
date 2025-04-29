@@ -1,16 +1,17 @@
 import axios from 'axios';
 
-const DREAMSTUDIO_API_KEY = import.meta.env.VITE_DREAMSTUDIO_API_KEY;
+const REPLICATE_API_TOKEN = import.meta.env.VITE_REPLICATE_API_TOKEN;
 
-if (!DREAMSTUDIO_API_KEY) {
-  throw new Error('VITE_DREAMSTUDIO_API_KEY is not set in environment variables');
+if (!REPLICATE_API_TOKEN) {
+  throw new Error('VITE_REPLICATE_API_TOKEN is not set in environment variables');
 }
 
-// ✅ Step 1: Define the type of API response
-interface DreamStudioResponse {
-  artifacts: {
-    uri: string;
-  }[];
+// ✅ Step 1: Define the response type for Replicate
+interface ReplicateResponse {
+  id: string;
+  status: string;
+  output: string[] | null;
+  error?: string;
 }
 
 export async function generateImage(prompt: string): Promise<string> {
@@ -19,39 +20,53 @@ export async function generateImage(prompt: string): Promise<string> {
   }
 
   try {
-    // ✅ Step 2: Tell axios that response.data is of type DreamStudioResponse
-    const response = await axios.post<DreamStudioResponse>(
-      'https://api.stability.ai/v2beta/stable-image/generate/core',
+    // ✅ Step 2: Send request to Replicate
+    const response = await axios.post<ReplicateResponse>(
+      '/api/v1/predictions',  // Use the /api prefix instead of the full URL
       {
-        prompt: prompt.trim(),
-        negative_prompt: "low quality, blurry, distorted, disfigured",
-        width: 1024,
-        height: 1024,
-        steps: 50,
-        cfg_scale: 7.5,
-        samples: 1,
-        style_preset: "photographic",
+        version: 'db21e45c-5b5d-420c-bb94-24f9c68f9a01', // SDXL model version
+        input: {
+          prompt: prompt.trim(),
+        },
       },
       {
         headers: {
-          Authorization: `Bearer ${DREAMSTUDIO_API_KEY}`,
-          Accept: 'application/json',
+          Authorization: `Token ${REPLICATE_API_TOKEN}`,
           'Content-Type': 'application/json',
         },
       }
     );
 
-    // ✅ Step 3: Now no error here
-    const imageUrl = response.data.artifacts?.[0]?.uri;
+    const prediction = response.data;
 
-    if (!imageUrl) {
-      throw new Error('No image was generated');
+    // ✅ Step 3: Poll until the image is ready
+    let imageResponse = prediction;
+    while (
+      imageResponse.status !== 'succeeded' &&
+      imageResponse.status !== 'failed'
+    ) {
+      await new Promise((res) => setTimeout(res, 2000));
+      const pollRes = await axios.get<ReplicateResponse>(
+        `/api/v1/predictions/${prediction.id}`,  // Use /api prefix for polling as well
+        {
+          headers: {
+            Authorization: `Token ${REPLICATE_API_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      imageResponse = pollRes.data;
     }
 
-    return imageUrl;
+    if (imageResponse.status === 'succeeded' && imageResponse.output?.[0]) {
+      return imageResponse.output[0];
+    } else {
+      throw new Error(`Image generation failed: ${imageResponse.error ?? 'Unknown error'}`);
+    }
+
   } catch (error: any) {
-    if (error.response?.data?.message) {
-      throw new Error(`DreamStudio API error: ${error.response.data.message}`);
+    if (error.response?.data?.detail) {
+      throw new Error(`Replicate API error: ${error.response.data.detail}`);
     }
     if (error instanceof Error) {
       throw error;

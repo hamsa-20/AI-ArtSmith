@@ -1,14 +1,17 @@
-import Replicate from 'replicate';
+import axios from 'axios';
 
-const REPLICATE_API_TOKEN = import.meta.env.VITE_REPLICATE_API_TOKEN;
+const DREAMSTUDIO_API_KEY = import.meta.env.VITE_DREAMSTUDIO_API_KEY;
 
-if (!REPLICATE_API_TOKEN) {
-  throw new Error('VITE_REPLICATE_API_TOKEN is not set in environment variables');
+if (!DREAMSTUDIO_API_KEY) {
+  throw new Error('VITE_DREAMSTUDIO_API_KEY is not set in environment variables');
 }
 
-const replicate = new Replicate({
-  auth: REPLICATE_API_TOKEN,
-});
+// ✅ Step 1: Define the type of API response
+interface DreamStudioResponse {
+  artifacts: {
+    uri: string;
+  }[];
+}
 
 export async function generateImage(prompt: string): Promise<string> {
   if (!prompt.trim()) {
@@ -16,34 +19,41 @@ export async function generateImage(prompt: string): Promise<string> {
   }
 
   try {
-    const output = await replicate.run(
-      "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b",
+    // ✅ Step 2: Tell axios that response.data is of type DreamStudioResponse
+    const response = await axios.post<DreamStudioResponse>(
+      'https://api.stability.ai/v2beta/stable-image/generate/core',
       {
-        input: {
-          prompt: prompt.trim(),
-          negative_prompt: "low quality, blurry, distorted, disfigured",
-          width: 1024,
-          height: 1024,
-          num_outputs: 1,
-          scheduler: "K_EULER",
-          num_inference_steps: 50,
-          guidance_scale: 7.5,
-          refine: "expert_ensemble_refiner",
-          high_noise_frac: 0.8,
-        }
+        prompt: prompt.trim(),
+        negative_prompt: "low quality, blurry, distorted, disfigured",
+        width: 1024,
+        height: 1024,
+        steps: 50,
+        cfg_scale: 7.5,
+        samples: 1,
+        style_preset: "photographic",
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${DREAMSTUDIO_API_KEY}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
       }
     );
 
-    if (!Array.isArray(output) || output.length === 0) {
+    // ✅ Step 3: Now no error here
+    const imageUrl = response.data.artifacts?.[0]?.uri;
+
+    if (!imageUrl) {
       throw new Error('No image was generated');
     }
 
-    return output[0] as string;
-  } catch (error) {
+    return imageUrl;
+  } catch (error: any) {
+    if (error.response?.data?.message) {
+      throw new Error(`DreamStudio API error: ${error.response.data.message}`);
+    }
     if (error instanceof Error) {
-      if (error.message.includes('API token')) {
-        throw new Error('Invalid or missing API token. Please check your environment variables.');
-      }
       throw error;
     }
     throw new Error('Failed to generate image. Please try again.');
